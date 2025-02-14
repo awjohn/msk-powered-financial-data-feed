@@ -9,9 +9,11 @@ public class Config {
     // Constants for configuration defaults
     public static final long DEFAULT_TICKER_INTERVAL = 1; // In minutes
     public static final Integer DEFAULT_OPENSEARCH_PORT = 443;
-    public static final String DEFAULT_OPENSEARCH_USERNAME = "admin";
-    public static final String DEFAULT_OPENSEARCH_PASSWORD = "Test@123";
-    public static final String DEFAULT_AWS_REGION = "eu-east-1";
+    public static final String DEFAULT_AWS_REGION = "us-east-1";
+    
+    // Remove hardcoded credentials - require explicit configuration
+    public static final String DEFAULT_OPENSEARCH_USERNAME = "";
+    public static final String DEFAULT_OPENSEARCH_PASSWORD = "";
 
     private String mskUsername;
     private String mskPassword;
@@ -31,22 +33,82 @@ public class Config {
     }
 
     private void validateAndSetProperties(ParameterTool properties) {
+        // Validate and set MSK properties
+        validateMskProperties(properties);
+        
+        // Validate and set OpenSearch properties
+        validateOpenSearchProperties(properties);
+        
+        // Validate and set event ticker properties
+        validateEventTickerProperties(properties);
+        
+        // Set event ticker interval with validation
+        setEventTickerInterval(properties);
+    }
+
+    private void validateMskProperties(ParameterTool properties) {
         mskUsername = requireNonNull(properties.get("msk.username"), "MSK username is required");
         mskPassword = requireNonNull(properties.get("msk.password"), "MSK password is required");
         mskBrokerUrl = requireNonNull(properties.get("msk.broker.url"), "MSK broker URL is required");
         
+        if (!mskBrokerUrl.startsWith("https://") && !mskBrokerUrl.startsWith("http://")) {
+            throw new IllegalArgumentException("MSK broker URL must start with http:// or https://");
+        }
+    }
+
+    private void validateOpenSearchProperties(ParameterTool properties) {
         openSearchEndpoint = requireNonNull(properties.get("opensearch.endpoint"), "OpenSearch endpoint is required");
-        openSearchPort = Integer.valueOf(properties.get("opensearch.port", String.valueOf(DEFAULT_OPENSEARCH_PORT)));
-        openSearchUsername = properties.get("opensearch.username", DEFAULT_OPENSEARCH_USERNAME);
-        openSearchPassword = properties.get("opensearch.password", DEFAULT_OPENSEARCH_PASSWORD);
         
+        // Validate port number
+        String portStr = properties.get("opensearch.port", String.valueOf(DEFAULT_OPENSEARCH_PORT));
+        try {
+            openSearchPort = Integer.valueOf(portStr);
+            if (openSearchPort <= 0 || openSearchPort > 65535) {
+                throw new IllegalArgumentException("OpenSearch port must be between 1 and 65535");
+            }
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid OpenSearch port number: " + portStr);
+        }
+
+        // Require explicit OpenSearch credentials
+        openSearchUsername = requireNonNull(properties.get("opensearch.username"), "OpenSearch username is required");
+        openSearchPassword = requireNonNull(properties.get("opensearch.password"), "OpenSearch password is required");
+        
+        if (!openSearchEndpoint.startsWith("https://") && !openSearchEndpoint.startsWith("http://")) {
+            throw new IllegalArgumentException("OpenSearch endpoint must start with http:// or https://");
+        }
+    }
+
+    private void validateEventTickerProperties(ParameterTool properties) {
         eventTicker1 = requireNonNull(properties.get("event.ticker.1"), "Event ticker 1 is required");
         eventTicker2 = requireNonNull(properties.get("event.ticker.2"), "Event ticker 2 is required");
         topic1enhanced = requireNonNull(properties.get("topic.ticker.1"), "Topic ticker 1 is required");
         topic2enhanced = requireNonNull(properties.get("topic.ticker.2"), "Topic ticker 2 is required");
         
+        // Validate ticker symbols format
+        validateTickerFormat(eventTicker1, "event.ticker.1");
+        validateTickerFormat(eventTicker2, "event.ticker.2");
+    }
+
+    private void validateTickerFormat(String ticker, String propertyName) {
+        if (!ticker.matches("^[A-Z0-9.]+$")) {
+            throw new IllegalArgumentException(
+                String.format("Invalid ticker format for %s: %s. Must contain only uppercase letters, numbers, and dots.",
+                    propertyName, ticker));
+        }
+    }
+
+    private void setEventTickerInterval(ParameterTool properties) {
         String intervalStr = properties.get("event.ticker.interval.minutes");
-        eventTickerInterval = (intervalStr != null ? Long.parseLong(intervalStr) : DEFAULT_TICKER_INTERVAL) * 60 * 1000;
+        try {
+            long interval = intervalStr != null ? Long.parseLong(intervalStr) : DEFAULT_TICKER_INTERVAL;
+            if (interval <= 0) {
+                throw new IllegalArgumentException("Event ticker interval must be positive");
+            }
+            eventTickerInterval = interval * 60 * 1000; // Convert to milliseconds
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("Invalid event ticker interval: " + intervalStr);
+        }
     }
 
     private String requireNonNull(String value, String message) {
